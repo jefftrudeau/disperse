@@ -1,0 +1,138 @@
+<?xml version="1.0"?>
+<!DOCTYPE disperse SYSTEM "disperse.dtd">
+<disperse>
+  <!--
+    Defines the cache.
+    
+    'compression' defines the use of memcached's built-in compression, which can be useful for
+    storing large values.  Default is false which disables compression.
+    
+    'expiration' defines the lifetime (in seconds) of objects in the cache.  Default is 0, which
+    means that objects will never expire.
+    
+    'implementation' defines which cache implementation to use.
+    
+    'locking' defines the use of locking while data is being updated in the cache.  This can cause
+    deadlocking issues, but should be considered if data is being persisted (see the definitions for
+    the 'Persisted' and 'PersistedReplicated' implementations).  Also note that this option does
+    nothing while using 'Normal' or 'Replicate'.  Default is false which means keys are not locked
+    while their data is being updated.
+    
+    'retry_interval' defines the amount of time (in microseconds) to wait before attempting to
+    obtain a lock when a key is locked in the cache.  Be careful not to set this too low as network
+    resources could become scarce, or too high as the locking mechanism is not queued and therefore
+    race conditions could lead to improper ordering of waiting threads.  Default is 50000 (0.05
+    seconds), or ~12 attempts/second.
+  -->
+  <cache compression="false"
+         expiration="0"
+         implementation="Replicated"
+         locking="false"
+         retry_interval="50000">
+    <!-- Defines any additional clients in use. -->
+    <clients>
+      <!-- <client language="php" library="client/CacheSet" /> -->
+      <!-- <client language="php" library="client/LinkedCacheSet" /> -->
+    </clients>
+    <!-- Defines the various caching implemenations. -->
+    <implementations>
+      <!--
+        All servers are pooled and get()/set() occurs on only one memcached server, which is
+        determined by a hash of the key and the list of servers.  This is the most performant yet
+        least redundant implementation.  The percent chance of data loss is approximately:
+          (100 / <number of memcached servers>) * <number of servers lost>
+      -->
+      <implementation id="Normal" />
+      <!--
+        Cache functions in the same manner as type 'Normal'.  In addition, data is written to a
+        persistent datastore during set() and falls back to read from the datastore if get() cannot
+        find the specified key in the cache.  This implementation will allow for the cache to fail,
+        and in such an event would use the datastore for all operations.
+      -->
+      <implementation id="Persisted" />
+      <!--
+        Cache is replicated among replication groups such that each group acts as its own cache of
+        type 'Normal'.  Data is written to each replication group sequentially during set() and
+        during get() reads from each replication group in a random order until a value is found for
+        the specified key.  If the number of servers lost is less than the number of replication
+        groups, there is no chance of data loss.  In addition, as long as the servers in one
+        replication group remain online, all servers in the other replication groups could fail
+        without any loss of data.  To maximize performance, reduce the number of replication groups
+        while increasing the number of servers per group.  To maximize redundancy, reduce the number
+        of servers per group while increasing the number of replication groups.
+      -->
+      <implementation id="Replicated" />
+      <!--
+        A munging of both the 'Persisted' and 'Replicated' implementations, this provides the best
+        balance between performance and redundancy.  During get(), each replication group is queried
+        in random order before attempting to read from the datastore, while set() will update all
+        replication groups and the datastore.
+      -->
+      <implementation id="PersistedReplicated" />
+    </implementations>
+    <!--
+      Defines the cache replication groups.  Each server in each group must correspond to the id of
+      a server in the list of servers below.
+    -->
+    <replication_groups>
+      <replication_group id="group1" servers="server1 server3" />
+      <replication_group id="group2" servers="server2 server4" />
+    </replication_groups>
+    <!-- Defines the memcached servers. -->
+    <servers>
+      <server id="server1" host="localhost" port="11211" />
+      <server id="server2" host="localhost" port="11212" />
+      <server id="server3" host="localhost" port="11213" />
+      <server id="server4" host="localhost" port="11214" />
+    </servers>
+    <!--
+      Defines the cache tables in use.  If using 'Persisted' or 'PersistedReplicated', each table
+      defined here needs to have a corresponding table in the datasource in the form 'disperse_%s',
+      where %s is the name of the table as defined below.  The 'data', 'lock' and 'session' tables
+      are required.
+    -->
+    <tables>
+      <table>data</table>
+      <table>lock</table>
+      <table>session</table>
+    </tables>
+  </cache>
+  <datasource>
+    <connection>
+      <!-- The Data Source Name (DSN) for the Datasource object (can vary by RDBMS). -->
+      <dsn>mysql:host=localhost;dbname=disperse</dsn>
+      <!-- The username with which to connect to the datasource. -->
+      <username>disperser</username>
+      <!-- The password with which to connect to the datasource. -->
+      <password>d1sp3rs3r</password>
+      <!-- Language-specific options to pass to the datasource when establishing a connection. -->
+      <options>
+        <!-- Request a persistent connection when using PHP. -->
+        <option language="php" name="PDO::ATTR_PERSISTENT" value="true" />
+      </options>
+    </connection>
+    <!-- Defines the SQL used to build prepared statements. -->
+    <statements>
+      <!-- The 'delete' SQL statement; deletes one row from the cache. -->
+      <statement type="delete" sql="DELETE FROM disperse_%s WHERE id = ?" />
+      <!-- The 'expire' SQL statement; expires data from the cache. -->
+      <statement type="expire" sql="DELETE FROM disperse_%s WHERE expire &gt; 0 AND expire &lt;= ?" />
+      <!-- The 'flush' SQL statement; deletes all rows from the cache. -->
+      <statement type="flush" sql="DELETE FROM disperse_%s" />
+      <!-- The 'insert' SQL statement; inserts one row into the cache. -->
+      <statement type="insert" sql="INSERT INTO disperse_%s (id, data, expire) VALUES (?, ?, ?)" />
+      <!-- The 'select' SQL statement; retrieves one row from the cache. -->
+      <statement type="select" sql="SELECT data FROM disperse_%s WHERE id = ?" />
+      <!-- The 'update' SQL statement; updates one row in the cache. -->
+      <statement type="update" sql="UPDATE disperse_%s SET data = ?, expire = ? WHERE id = ?" />
+    </statements>
+  </datasource>
+  <!--
+    Defines the use of disperse's PHP session management.  Session data is persisted by whichever
+    implementation is being used.
+    
+    'lifetime' defines the lifetime (in seconds) of session data in the cache.  Default is 1800
+    seconds (30 minutes).
+  -->
+  <session language="php" enabled="true" lifetime="1800" />
+</disperse>
